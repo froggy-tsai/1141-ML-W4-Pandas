@@ -86,41 +86,65 @@ def save_results_md(filename="test_results/results.md"):
 # -------------------------
 def test_feature_engineering(sample_df):
     df = student_submission.feature_engineering(sample_df.copy())
-    
-    alice = df[df["姓名"] == "Alice"].iloc[0] if "Alice" in df["姓名"].values else None
-    david = df[df["姓名"] == "David"].iloc[0] if "David" in df["姓名"].values else None
 
-    # 總分、平均、及格檢查
-    expected_total = 95+88+78+90+85
-    check("總分正確", df is not None and "總分" in df.columns and alice is not None and alice["總分"] == expected_total,
-          msg=f"Alice 總分預期 {expected_total}, 得到 {alice['總分'] if alice is not None else 'None'}")
-    check("平均正確", df is not None and "平均" in df.columns and alice is not None and pytest.approx(alice["平均"]) == expected_total/5,
-          msg=f"Alice 平均預期 {expected_total/5}, 得到 {alice['平均'] if alice is not None else 'None'}")
-    check("David 是否不及格", df is not None and "是否及格" in df.columns and david is not None and david["是否及格"] is False)
-    check("Alice 是否及格", df is not None and "是否及格" in df.columns and alice is not None and alice["是否及格"] is True)
+    # 前置檢查
+    assert "總分" in df.columns, "總分欄位不存在"
+    assert "平均" in df.columns, "平均欄位不存在"
+    assert "是否及格" in df.columns, "是否及格欄位不存在"
+
+    alice = df[df["姓名"] == "Alice"].iloc[0]
+    david = df[df["姓名"] == "David"].iloc[0]
+
+    expected_total = 95 + 88 + 78 + 90 + 85
+
+    # 總分檢查
+    check(
+        "總分正確",
+        alice["總分"] == expected_total,
+        msg=f"Alice 總分預期 {expected_total}, 得到 {alice['總分']}"
+    )
+
+    # 平均分檢查
+    check(
+        "平均正確",
+        alice["平均"] == pytest.approx(expected_total / 5),
+        msg=f"Alice 平均預期 {expected_total / 5}, 得到 {alice['平均']}"
+    )
+
+    # 是否及格檢查
+    check("David 是否不及格", david["是否及格"] == False)
+    check("Alice 是否及格", alice["是否及格"] == True)
 
 def test_filter_and_analyze_data(sample_df):
     df = student_submission.feature_engineering(sample_df.copy())
     result = student_submission.filter_and_analyze_data(df)
 
-    # 確保回傳 dict
     assert isinstance(result, dict), "filter_and_analyze_data 必須回傳 dict"
 
     math_failed = result.get("math_failed")
-    check("數學不及格人數", math_failed is not None and len(math_failed) == 2,
-          msg=f"預期 2, 得到 {len(math_failed) if math_failed is not None else 'None'}")
+    check(
+        "數學不及格人數",
+        math_failed is not None and len(math_failed) == 2,
+        msg=f"預期 2, 得到 {len(math_failed) if math_failed is not None else 'None'}"
+    )
 
     high_A = result.get("high_A")
-    check("A班英文>90人數", high_A is not None and len(high_A) == 2,
-          msg=f"預期 2, 得到 {len(high_A) if high_A is not None else 'None'}")
+    check(
+        "A班英文>90人數",
+        high_A is not None and len(high_A) == 2,
+        msg=f"預期 2, 得到 {len(high_A) if high_A is not None else 'None'}"
+    )
 
     top_student = result.get("top_student")
     name_top = top_student.iloc[0]["姓名"] if top_student is not None and not top_student.empty else None
-    check("總分最高學生是 Eva", name_top == "Eva",
-          msg=f"預期 Eva, 得到 {name_top}")
+    check(
+        "總分最高學生是 Eva",
+        name_top == "Eva",
+        msg=f"預期 Eva, 得到 {name_top}"
+    )
 
     summary = result.get("summary")
-    check("summary 含數學欄位", summary is not None and "數學" in summary.columns if summary is not None else False)
+    check("summary 含數學欄位", summary is not None and "數學" in summary.columns)
 
 def test_save_results(tmp_path, sample_df):
     df = student_submission.feature_engineering(sample_df.copy())
