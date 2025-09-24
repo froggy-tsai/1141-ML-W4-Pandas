@@ -1,0 +1,179 @@
+name: Student Submission Review
+
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+
+jobs:
+  validate_submission:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Get changed files from PR
+        run: |
+          PR_NUM=${{ github.event.pull_request.number }}
+          curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUM/files?per_page=100" \
+            > pr_files.json
+          jq -r '.[].filename' pr_files.json > changed_files.txt
+
+      - name: Validate submission rules
+        id: validate
+        run: |
+          ERROR_MSG=""
+          while IFS= read -r file; do
+            if [[ "$file" == "README.md" ]]; then
+              ERROR_MSG+="❌ 不可修改 README.md\n"
+            fi
+            if [[ "$file" == "template.py" ]]; then
+              ERROR_MSG+="❌ 不可修改 template.py\n"
+            fi
+          done < changed_files.txt
+
+          NEW_FILES=$(grep "^submit/" changed_files.txt || true)
+          MAIN_FILES=$(echo "$NEW_FILES" | grep -E '^submit/W4_[0-9]{9}\.py$' || true)
+          MAIN_COUNT=$(echo "$MAIN_FILES" | grep -c ".*" || true)
+
+          if [[ $MAIN_COUNT -ne 1 ]]; then
+            ERROR_MSG+="❌ 你必須新增且僅有一個主程式檔 (submit/W4_<學號>.py)\n"
+          fi
+
+          if [[ -n "$ERROR_MSG" ]]; then
+            echo "⚠️ 提交規則檢查未通過" > pr_feedback.md
+            echo -e "$ERROR_MSG" >> pr_feedback.md
+            echo "completion_score=0" >> $GITHUB_OUTPUT
+          else
+            echo "✅ 提交符合規則" > pr_feedback.md
+            echo "PR完成分數: 10" >> pr_feedback.md
+            echo "completion_score=10" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post feedback comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-file: pr_feedback.md
+
+      - name: Checkout PR head
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+
+      - name: Upload student submission
+        uses: actions/upload-artifact@v4
+        with:
+          name: student-submission
+          path: submit/
+  
+  pytest_check:
+    needs: validate_submission
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      pytest_score: ${{ steps.score.outputs.pytest_score }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Download student submission
+        uses: actions/download-artifact@v4
+        with:
+          name: student-submission
+          path: tests/submit/
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - run: pip install pytest pandas numpy
+
+      - name: Run pytest and save results
+        run: |
+          mkdir -p test_results
+          pytest tests/test_W4.py --disable-warnings -q --tb=short
+
+      - name: Post pytest results
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-file: test_results/results.md
+
+  ai_review:
+    needs: validate_submission
+    runs-on: ubuntu-latest
+    if: success()
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+      - run: pip install google-generativeai
+
+      - name: Prepare diff for AI review
+        run: |
+          PR_NUM=${{ github.event.pull_request.number }}
+          curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3.diff" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUM.diff" \
+            > pr_diff.txt
+
+      - name: Run Gemini AI Review
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python3 - <<EOF
+          import os
+          import google.generativeai as genai
+
+          genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
+          diff = open("pr_diff.txt", encoding="utf-8").read()
+          prompt = f"""你是一位資深軟體工程師。
+          以下是學生的提交檔案修改，請進行簡短 Code Review。
+
+          ### 優點
+          - 至多 2 點
+
+          ### 建議改進
+          - 每檔案最多 3 條建議
+          - 用 bullet point
+          - 格式: - [行號] 問題簡述與改進建議
+
+          ### 程式品質分數
+          - 給 0~15 分
+          - 僅輸出數字
+
+          程式碼修改如下：
+          {diff}
+          """
+
+          model = genai.GenerativeModel("gemini-1.5-flash")
+          response = model.generate_content(prompt)
+          review = getattr(response, "text", str(response))
+
+          with open("review_result.md", "w", encoding="utf-8") as f:
+              f.write(review)
+          EOF
+
+      - name: Post AI review
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-file: review_result.md
