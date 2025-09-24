@@ -55,6 +55,13 @@
 - 完成 template.py 的所有 TODO
 - 提交 Pull Request，標題請包含「W4_學號」
 
+執行檔案方法：
+
+```
+cd submit
+python W4_<學號>.py
+```
+
 ---
 
 ## 評分方式
